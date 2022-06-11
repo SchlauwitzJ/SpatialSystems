@@ -3,7 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Union
 
-# todo should be possible self.vec[dim] ==> self[dim]
+
 SPATIAL_KEYS = ("+0", "-0", "+1", "-1", "+2", "-2", "+3", "-3")
 COM_ROT = {"++": 1, "+-": 1, "-+": 1, "--": -1}
 GEO_ROT = {"12": 1, "21": -1, "13": 1, "31": -1, "23": 1, "32": -1,
@@ -44,8 +44,7 @@ class GeoSpatial:
     def __init__(self, src: Union[dict, GeoSpatial] = None):
         """
         dimension 0 is assumed to be scalar while others are part of a vector/bi-/tri-.
-        we are assuming the number of dimensions are in single character lengths.
-            (e.g. E->{E+0, E+1, E+2, E+3, E-1, E-2, E-3, E-0})
+        The layout is {+0, +1, +2, +3, -1, -2, -3, -0}
         """
 
         if src is None:
@@ -57,7 +56,13 @@ class GeoSpatial:
         return self.__vec.keys()
 
     def zero(self, dim: Union[str, list, tuple, set] = None) -> None:
+        """
+        Set all specified elements of this Geo to zero.
+        Clear all dimensions if none are specified.
 
+        :param dim:
+        :return:
+        """
         if dim is None:
             for dim in self.keys():
                 self[dim] = 0.0
@@ -70,6 +75,12 @@ class GeoSpatial:
         return
 
     def scale(self, value=1.0, dim: Union[str, list, tuple, set] = None) -> GeoSpatial:
+        """
+        Get a scaled version of this Geo.
+        :param value:
+        :param dim:
+        :return:
+        """
         n_self = GeoSpatial(src=self)
 
         if dim is None:
@@ -84,11 +95,20 @@ class GeoSpatial:
         return n_self
 
     def subset(self, typ="scalar") -> GeoSpatial:
+        """
+        Get the sub-set Geo based on the global GEO_SHAPE.
+        :param typ:
+        :return:
+        """
         if typ in GEO_SHAPE.keys():
             return GeoSpatial(src={ky: self[ky] for ky in GEO_SHAPE[typ]})
         raise KeyError(f"{typ} is not a valid key for geometrics.")
 
     def conj(self) -> GeoSpatial:
+        """
+        The complex conjugate of the Geo.
+        :return:
+        """
         nw_spc = GeoSpatial()
         for ky, val in self:
             if ky[0] == "+":
@@ -98,9 +118,17 @@ class GeoSpatial:
         return nw_spc
 
     def scale_sq(self) -> float:
+        """
+        Get the scale squared of this Geo. I.e. ||x||**2
+        :return:
+        """
         return (self & self.conj())[SPATIAL_KEYS[0]]
 
     def one_over(self) -> GeoSpatial:
+        """
+        Get 1/x of this Geo.
+        :return:
+        """
         nw_spc = self.conj()
         nw_spc /= self.scale_sq()
         return nw_spc
@@ -180,7 +208,7 @@ class GeoSpatial:
         other can also be a sub-set of the full space.
         This is equivalent to a vector inner(dot)-product
         :param other: contains a vector and/or bi-vector
-        :return: a geospatial set with the resulting scalar
+        :return: a geospatial set with the resulting real scalar in +0
         """
         nw_spc = GeoSpatial()
         for o_key in other.keys():
@@ -193,7 +221,7 @@ class GeoSpatial:
         other can also be a sub-set of the full space.
         This is equivalent to a vector outer-product
         :param other: contains a vector and/or bi-vector
-        :return: a geospatial set with the resulting bi-vector and/or vector
+        :return: a geospatial set with the resulting vector in (+1, +2, +3)
         """
         nw_spc = GeoSpatial()
         for o_key in other.keys():
@@ -208,8 +236,8 @@ class GeoSpatial:
         """
         other can also be a sub-set of the full space.
         This is equivalent to a vector geometric-product
-        :param other:
-        :return:
+        :param other: contains a scalar, vector, bi-vector, and/or tri-vector
+        :return: a geospatial set
         """
 
         if isinstance(other, (float, int, bool)):
@@ -228,6 +256,12 @@ class GeoSpatial:
         return nw_spc
 
     def __pow__(self, power, modulo=None):
+        """
+        scale the elements based on the power. This is useful for euclidean operations.
+        :param power:
+        :param modulo:
+        :return: this geometric product scaled by a power
+        """
         reslt = GeoSpatial()
         for ky in self.keys():
             reslt[ky] = np.sign(self[ky]) * np.abs(self[ky]) ** power
@@ -236,11 +270,11 @@ class GeoSpatial:
 
     def __truediv__(self, other: Union[dict, float: 1.0, int, bool, GeoSpatial]) -> GeoSpatial:
         """
-                other can also be a sub-set of the full space.
-                This is equivalent to a vector geometric-product
-                :param other:
-                :return:
-                """
+        other can also be a sub-set of the full space.
+        This is equivalent to a vector geometric-product
+        :param other:
+        :return:
+        """
 
         if isinstance(other, (float, int, bool)):
             nw_spc = GeoSpatial(src=self)
@@ -249,6 +283,10 @@ class GeoSpatial:
         return self.__mul__(other=other.one_over())
 
     def __abs__(self) -> GeoSpatial:
+        """
+        rectify the elements such that they are all positive.
+        :return:
+        """
         n_self = GeoSpatial(src=self)
 
         for key in n_self.keys():
