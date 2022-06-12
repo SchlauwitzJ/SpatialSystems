@@ -2,9 +2,11 @@ from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass
 from typing import Union
-
+import cmath
 
 SPATIAL_KEYS = ("+0", "-0", "+1", "-1", "+2", "-2", "+3", "-3")
+GEO_SHAPE3 = ('0', '1', '2', '3')
+
 COM_ROT = {"++": 1, "+-": 1, "-+": 1, "--": -1}
 GEO_ROT = {"12": 1, "21": -1, "13": 1, "31": -1, "23": 1, "32": -1,
            "01": 1, "02": 1, "03": 1, "10": 1, "20": 1, "30": 1,
@@ -27,6 +29,9 @@ GEO_SPATIAL_KEYS = {
     "+3": {"+0": "+3", "-0": "-3", "+1": "-2", "-1": "+2", "+2": "-1", "-2": "+1", "+3": "+0", "-3": "-0"},
     "-3": {"+0": "-3", "-0": "+3", "+1": "+2", "-1": "-2", "+2": "+1", "-2": "-1", "+3": "-0", "-3": "+0"}}
 
+
+def flip_sign(key1, key2) -> float:
+    return GEO_ROT[key1[1] + key2[1]] * COM_ROT[key1[0] + key2[0]]
 
 @dataclass
 class GeoSpatial:
@@ -117,12 +122,42 @@ class GeoSpatial:
                 nw_spc[ky] = -val
         return nw_spc
 
-    def scale_sq(self) -> float:
+    def magnitude_vectorized(self) -> GeoSpatial:
         """
-        Get the scale squared of this Geo. I.e. ||x||**2
+        Get the scalar and vector showing the magnitude of the complex values.
+        :return:
+        """
+        nw_spc = GeoSpatial()
+        for ky_num in GEO_SHAPE3:
+            nw_spc['+' + ky_num] = np.sqrt(self['+' + ky_num] ** 2 + self['-' + ky_num] ** 2)
+
+        return nw_spc
+
+    def phase_vectorized(self) -> GeoSpatial:
+        """
+        Get the scalar and vector showing the radian phase of the complex values.
+        :return:
+        """
+        nw_spc = GeoSpatial()
+        for ky_num in GEO_SHAPE3:
+            c_num = self['+' + ky_num] + self['-' + ky_num]*1j
+            nw_spc['-' + ky_num] = np.phase(c_num)
+
+        return nw_spc
+
+    def magnitude_sq(self) -> float:
+        """
+        Get the magnitude squared of this Geo. I.e. ||x||**2
         :return:
         """
         return (self & self.conj())[SPATIAL_KEYS[0]]
+
+    def magnitude(self) -> float:
+        """
+        Get the magnitude of this Geo. I.e. ||x||
+        :return:
+        """
+        return np.sqrt(self.magnitude_sq())
 
     def one_over(self) -> GeoSpatial:
         """
@@ -130,7 +165,7 @@ class GeoSpatial:
         :return:
         """
         nw_spc = self.conj()
-        nw_spc /= self.scale_sq()
+        nw_spc /= self.magnitude_sq()
         return nw_spc
 
     def get(self, key, default) -> float:
@@ -227,8 +262,7 @@ class GeoSpatial:
         for o_key in other.keys():
             for s_key in self.keys():
                 if s_key != o_key:
-                    nw_spc[GEO_SPATIAL_KEYS[s_key][o_key]] += self[s_key] * other[o_key] * GEO_ROT[
-                        o_key[1] + s_key[1]] * COM_ROT[o_key[0] + s_key[0]] * 0.5
+                    nw_spc[GEO_SPATIAL_KEYS[s_key][o_key]] += self[s_key] * other[o_key] * flip_sign(o_key, s_key) * 0.5
 
         return nw_spc
 
@@ -247,7 +281,7 @@ class GeoSpatial:
         nw_spc = GeoSpatial()
         for o_key in other.keys():
             for s_key in self.keys():
-                cmpnd = self[s_key] * other[o_key] * GEO_ROT[o_key[1] + s_key[1]] * COM_ROT[o_key[0] + s_key[0]]
+                cmpnd = self[s_key] * other[o_key] * flip_sign(o_key, s_key)
                 if o_key != s_key:
                     cmpnd *= 0.5
 
@@ -255,16 +289,36 @@ class GeoSpatial:
 
         return nw_spc
 
-    def __pow__(self, power, modulo=None):
+    def __pow__(self, power: Union[dict, float: 1.0, int, bool, GeoSpatial], modulo=None):
         """
-        scale the elements based on the power. This is useful for euclidean operations.
+        Apply the power to each complex pair separately then apply the geospatial transforms
+        according to the geometric product.
         :param power:
         :param modulo:
-        :return: this geometric product scaled by a power
+        :return:
         """
+        geo_mag_vec = self.magnitude_vectorized()
+        geo_phs_vec = self.phase_vectorized()
+
         reslt = GeoSpatial()
-        for ky in self.keys():
-            reslt[ky] = np.sign(self[ky]) * np.abs(self[ky]) ** power
+
+        if isinstance(power, (float, int, bool)):
+            for ky_num in GEO_SHAPE3:
+                mag_val = geo_mag_vec['+' + ky_num] ** power
+                phs_val = geo_phs_vec['-' + ky_num] * power
+                reslt['+' + ky_num] += mag_val * np.cos(phs_val)
+                reslt['-' + ky_num] += mag_val * np.sin(phs_val)
+
+            return reslt
+
+        for p_key in power.keys():
+            for ky_num in GEO_SHAPE3:
+                mag_val = geo_mag_vec['+' + ky_num] ** power[p_key]
+                phs_val = geo_phs_vec['-' + ky_num] * power[p_key]
+                reslt[GEO_SPATIAL_KEYS['+' + ky_num][p_key]] += mag_val * np.cos(phs_val) * flip_sign('+' + ky_num,
+                                                                                                      p_key)
+                reslt[GEO_SPATIAL_KEYS['-' + ky_num][p_key]] += mag_val * np.sin(phs_val) * flip_sign('-' + ky_num,
+                                                                                                      p_key)
 
         return reslt
 
@@ -284,7 +338,7 @@ class GeoSpatial:
 
     def __abs__(self) -> GeoSpatial:
         """
-        rectify the elements such that they are all positive.
+        rectify the elements such that they are all positive. If you want a scalar, use magnitude
         :return:
         """
         n_self = GeoSpatial(src=self)
@@ -307,8 +361,3 @@ class GeoSpatial:
 
         return n_str
 
-
-@dataclass
-class GeoMatrix:
-    def __init__(self):
-        pass
