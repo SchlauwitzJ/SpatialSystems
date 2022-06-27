@@ -2,6 +2,8 @@ from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass
 from typing import Union
+import cmath as cm
+import json
 
 SPATIAL_KEYS = ("+0", "-0", "+1", "-1", "+2", "-2", "+3", "-3")
 GEO_SHAPE3 = ('0', '1', '2', '3')
@@ -14,10 +16,9 @@ GEO_ROT = {"12": 1, "21": -1, "13": 1, "31": -1, "23": 1, "32": -1,
 GEO_SHAPE = {"scalar": ("+0",),
              "vector": ("+1", "+2", "+3"),
              "bi-vector": ("-1", "-2", "-3"),
-             "tri-vector": ("-0",)}
-
-GEO_SHAPE2 = {"scalars": ("+0", "-0"),
-              "vectors": ("+1", "+2", "+3", "-1", "-2", "-3")}
+             "tri-vector": ("-0",),
+             "scalars": ("+0", "-0"),
+             "vectors": ("+1", "+2", "+3", "-1", "-2", "-3")}
 
 GEO_SPATIAL_KEYS = {
     "+0": {"+0": "+0", "-0": "-0", "+1": "+1", "-1": "-1", "+2": "+2", "-2": "-2", "+3": "+3", "-3": "-3"},
@@ -44,6 +45,7 @@ class Geo:
     z = x | y => outer-product
     z = x ^ y => geometric-product
     z = x.inverse() => 1/x based on vector math
+    z = x @ y => rotation of x by y
 
     dimension-wise operators:
     z = x * y => multiplication
@@ -92,11 +94,11 @@ class Geo:
         return {ky: val for ky, val in self}
 
     def __str__(self) -> str:
-        n_str = "<"
+        n_str = "Geo<"
         for dim in SPATIAL_KEYS:
             n_str += f"{dim}: {self[dim]}, "
 
-        n_str += ">"
+        n_str = n_str[:-2] + ">"
 
         return n_str
 
@@ -114,13 +116,10 @@ class Geo:
         return self.__class__, (self.__vec, 0.0)
 
     def __repr__(self) -> str:
-        n_str = "Geo<"
-        for dim in SPATIAL_KEYS:
-            n_str += f"{dim}: {self[dim]}, "
+        return json.dumps(self.to_json(), sort_keys=True, ensure_ascii=False, indent=4)
 
-        n_str += ">"
-
-        return n_str
+    def to_json(self):
+        return self.__dict__()
 
     # ----- dictionary/vector-like elements
     def keys(self):
@@ -211,6 +210,22 @@ class Geo:
                 nw_spc['+' + ky[1]] = val
         return nw_spc
 
+    def phase(self) -> Geo:
+        """
+        Get the Geo showing the radian phase relative to the scalar.
+        :return:
+        """
+        nw_spc = Geo()
+        for ky in self.keys():
+            if ky != '+0':
+                c_num = self['+0'] + self[ky]*1j
+                nw_spc[ky] = np.phase(c_num)
+
+        return nw_spc
+
+    def mag_phase(self) -> (float, Geo):
+        return self.magnitude(), self.phase()
+
     def conj(self) -> Geo:
         """
         The complex conjugate of the Geo.
@@ -279,24 +294,25 @@ class Geo:
     def __rmul__(self, other) -> Geo:
         return self * other
 
-    def __pow__(self, power: Union[dict, float: 1.0, int, complex, bool, Geo], modulo=None) -> Geo:
+    def __pow__(self, power: Union[dict, float: 1.0, int, complex, bool], modulo=None) -> Geo:
         """
-        Apply the power to each axis separately.
+        Apply the power to each complex pair separately.
         :param power:
         :param modulo:
         :return:
         """
+        geo_mag_vec = self.magnitude_vectorized()
+        geo_phs_vec = self.phase_vectorized()
 
-        nw_spc = Geo(self)
-        if isinstance(power, (Geo, dict)):
-            for key in set(power.keys()).intersection(self.keys()):
-                nw_spc[key] **= power[key]
-        elif isinstance(power, (float, int, bool)):
-            nw_spc[GEO_SHAPE["scalar"][0]] **= power
-        else:
-            nw_spc[GEO_SHAPE["scalar"][0]] **= power.real
-            nw_spc[GEO_SHAPE["tri-vector"][0]] **= power.imag
-        return nw_spc
+        reslt = Geo()
+
+        for ky_num in GEO_SHAPE3:
+            mag_val = geo_mag_vec['+' + ky_num] ** power
+            phs_val = geo_phs_vec['-' + ky_num] * power
+            reslt['+' + ky_num] += mag_val * np.cos(phs_val)
+            reslt['-' + ky_num] += mag_val * np.sin(phs_val)
+
+            return reslt
 
     def __rpow__(self, other) -> Geo:
         if not isinstance(other, Geo):
@@ -456,9 +472,6 @@ class Geo:
     def copy(self) -> Geo:
         return Geo(self)
 
-    def rotor(self, theta: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
-        return
-
     # ---- cross-dimensional operations ------------
     def norm(self) -> Geo:
         mag = self.magnitude()
@@ -479,15 +492,18 @@ class Geo:
 
     def phase_vectorized(self) -> Geo:
         """
-        Get the scalar and vector showing the radian phase of the complex values.
+        Get the bi-vector and tri-vector showing the radian phase of the complex values.
         :return:
         """
         nw_spc = Geo()
         for ky_num in GEO_SHAPE3:
             c_num = self['+' + ky_num] + self['-' + ky_num]*1j
-            nw_spc['+' + ky_num] = np.phase(c_num)
+            nw_spc['-' + ky_num] = cm.phase(c_num)
 
         return nw_spc
+
+    def mag_pha_vectorized(self) -> (Geo, Geo):
+        return self.magnitude_vectorized(), self.phase_vectorized()
 
     def inverse(self) -> Geo:
         """
@@ -571,15 +587,19 @@ class Geo:
         return other | self
 
     def __matmul__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
-        """ todo implement this
-        Rotation        (e**(-other.norm()*other.magnitude()/2)|self|e**(other.norm()*other.magnitude()/2)
+        """
+        Rotation using the reference rotor provided as other.
+        The rotor is not normalized here to allow for additional functionality.
+        Remember that the rotation is twice the rotors phase as the geometric
+        product is carried out twice.
+
         :param other: contains a scalar, vector, bi-vector, and/or tri-vector
         :return: a geospatial set
         """
 
         if not isinstance(other, Geo):
             other = convert_to_geo(value=other)
-        normy = other.norm()
+        # normy = other.norm()
 
         return other.inverse() | self | other
 
@@ -620,69 +640,8 @@ class Geo:
             rslt[GEO_SHAPE["bi-vector"][dst_ind]] = self[GEO_SHAPE["bi-vector"][ind]]
         return rslt
 
-    def pow_complex(self, power: Union[dict, float: 1.0, int, bool, Geo], modulo=None) -> Geo:
-        """
-        Apply the power to each complex pair separately then apply the geospatial transforms
-        according to the geometric product.
-        :param power:
-        :param modulo:
-        :return:
-        """
-        geo_mag_vec = self.magnitude_vectorized()
-        geo_phs_vec = self.phase_vectorized()
-
-        reslt = Geo()
-
-        if isinstance(power, (float, int, bool)):
-            for ky_num in GEO_SHAPE3:
-                mag_val = geo_mag_vec['+' + ky_num] ** power
-                phs_val = geo_phs_vec['-' + ky_num] * power
-                reslt['+' + ky_num] += mag_val * np.cos(phs_val)
-                reslt['-' + ky_num] += mag_val * np.sin(phs_val)
-
-            return reslt
-
-        # for p_key in power.keys(): todo this should cycle through different axes based on the power order
-        #     for ky_num in GEO_SHAPE3:
-        #         mag_val = geo_mag_vec['+' + ky_num] ** power[p_key]
-        #         phs_val = geo_phs_vec['-' + ky_num] * power[p_key]
-        #         reslt[GEO_SPATIAL_KEYS['+' + ky_num][p_key]] += mag_val * np.cos(phs_val) * flip_sign('+' + ky_num,
-        #                                                                                               p_key)
-        #         reslt[GEO_SPATIAL_KEYS['-' + ky_num][p_key]] += mag_val * np.sin(phs_val) * flip_sign('-' + ky_num,
-        #                                                                                               p_key)
-        raise ValueError('geo-powers is not yet implemented')
-        # return reslt
-
-    def pow_geo(self, power: Union[dict, float: 1.0, int, bool, Geo], modulo=None) -> Geo:
-
-        geo_mag_vec = self.magnitude_vectorized()
-        geo_phs_vec = self.phase_vectorized()
-
-        reslt = Geo()
-
-        if isinstance(power, (float, int, bool)):
-            for ky_num in GEO_SHAPE3:
-                mag_val = geo_mag_vec['+' + ky_num] ** power
-                phs_val = geo_phs_vec['-' + ky_num] * power
-                reslt['+' + ky_num] += mag_val * np.cos(phs_val)
-                reslt['-' + ky_num] += mag_val * np.sin(phs_val)
-
-            return reslt
-
-        # for p_key in power.keys(): todo this should cycle through different axes based on the power order
-        #     for ky_num in GEO_SHAPE3:
-        #         mag_val = geo_mag_vec['+' + ky_num] ** power[p_key]
-        #         phs_val = geo_phs_vec['-' + ky_num] * power[p_key]
-        #         reslt[GEO_SPATIAL_KEYS['+' + ky_num][p_key]] += mag_val * np.cos(phs_val) * flip_sign('+' + ky_num,
-        #                                                                                               p_key)
-        #         reslt[GEO_SPATIAL_KEYS['-' + ky_num][p_key]] += mag_val * np.sin(phs_val) * flip_sign('-' + ky_num,
-        #                                                                                               p_key)
-        raise ValueError('geo-powers is not yet implemented')
-        # return reslt
-
-    # ------- et al. ------------
     # -------- comparison methods ---------
-    def __lt__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __lt__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Less than
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type.
@@ -691,18 +650,18 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int, bool)):
-            return self.magnitude() < other
+            return int(self.magnitude() < other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] < other[ky]
+                rslt[ky] = int(self[ky] < other[ky])
             else:
-                rslt[ky] = self[ky] < 0
+                rslt[ky] = int(self[ky] < 0)
 
         return rslt
 
-    def __le__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __le__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Less than or equal to
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type.
@@ -711,18 +670,18 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int, bool)):
-            return self.magnitude() <= other
+            return int(self.magnitude() <= other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] <= other[ky]
+                rslt[ky] = int(self[ky] <= other[ky])
             else:
-                rslt[ky] = self[ky] <= 0
+                rslt[ky] = int(self[ky] <= 0)
 
         return rslt
 
-    def __eq__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __eq__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Equal to
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type. We can then check if it is zero by using x == 0
@@ -731,20 +690,20 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int)):
-            return self.magnitude() == other
+            return int(self.magnitude() == other)
         elif isinstance(other, bool):
-            return bool(self.magnitude()) == other
+            return int(bool(self.magnitude()) == other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] == other[ky]
+                rslt[ky] = int(self[ky] == other[ky])
             else:
-                rslt[ky] = self[ky] == 0
+                rslt[ky] = int(self[ky] == 0)
 
         return rslt
 
-    def __ne__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __ne__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Equal to
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type. We can then check if it is zero by using x == 0
@@ -753,20 +712,20 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int)):
-            return self.magnitude() != other
+            return int(self.magnitude() != other)
         elif isinstance(other, bool):
-            return bool(self.magnitude()) != other
+            return int(bool(self.magnitude()) != other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] != other[ky]
+                rslt[ky] = int(self[ky] != other[ky])
             else:
-                rslt[ky] = self[ky] != 0
+                rslt[ky] = int(self[ky] != 0)
 
         return rslt
 
-    def __ge__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __ge__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Greater than or equal to
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type.
@@ -775,18 +734,18 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int, bool)):
-            return self.magnitude() >= other
+            return int(self.magnitude() >= other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] >= other[ky]
+                rslt[ky] = int(self[ky] >= other[ky])
             else:
-                rslt[ky] = self[ky] >= 0
+                rslt[ky] = int(self[ky] >= 0)
 
         return rslt
 
-    def __gt__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[bool, Geo]:
+    def __gt__(self, other: Union[dict, float: 0.0, int, bool, Geo]) -> Union[int, Geo]:
         """ Greater than
         Check against magnitude if it is being compared with a scalar.
         Convert the magnitude to match the scalar type.
@@ -795,20 +754,70 @@ class Geo:
         :return:
         """
         if isinstance(other, (float, int, bool)):
-            return self.magnitude() >= other
+            return int(self.magnitude() >= other)
 
         rslt = Geo()
         for ky in self.keys():
             if ky in other.keys():
-                rslt[ky] = self[ky] > other[ky]
+                rslt[ky] = int(self[ky] > other[ky])
             else:
-                rslt[ky] = self[ky] > 0
+                rslt[ky] = int(self[ky] > 0)
+
+        return rslt
+
+    def min(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+        """
+        return the smaller value between self and other
+        :param other:
+        :return:
+        """
+
+        rslt = self.copy()
+
+        if isinstance(other, (float, int, bool)):
+            if rslt[GEO_SHAPE['scalar'][0]] > other:
+                rslt[GEO_SHAPE['scalar'][0]] = other
+        elif isinstance(other, (complex,)):
+            if rslt[GEO_SHAPE['scalar'][0]] > other.real:
+                rslt[GEO_SHAPE['scalar'][0]] = other.real
+            if rslt[GEO_SHAPE['tri-vector'][0]] > other.imag:
+                rslt[GEO_SHAPE['tri-vector'][0]] = other.imag
+        else:
+            for ky in self.keys():
+                if ky in other.keys() and other[ky] < self[ky]:
+                    rslt[ky] = other[ky]
+
+        return rslt
+
+    def max(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+        """
+        return the larger value between self and other
+        :param other:
+        :return:
+        """
+
+        rslt = self.copy()
+
+        if isinstance(other, (float, int, bool)):
+            if rslt[GEO_SHAPE['scalar'][0]] < other:
+                rslt[GEO_SHAPE['scalar'][0]] = other
+        elif isinstance(other, (complex,)):
+            if rslt[GEO_SHAPE['scalar'][0]] < other.real:
+                rslt[GEO_SHAPE['scalar'][0]] = other.real
+            if rslt[GEO_SHAPE['tri-vector'][0]] < other.imag:
+                rslt[GEO_SHAPE['tri-vector'][0]] = other.imag
+        else:
+            for ky in self.keys():
+                if ky in other.keys() and other[ky] > self[ky]:
+                    rslt[ky] = other[ky]
 
         return rslt
 
 
-def convert_to_geo(value: Union[float, int, bool, complex, dict], def_val=0.0) -> Geo:
-    if isinstance(value, dict):
+def convert_to_geo(value: Union[float, int, bool, complex, dict, Geo], def_val=0.0) -> Geo:
+    if value is None:
+        return Geo()
+    elif isinstance(value, (dict, Geo)):
         return Geo(value, def_val=def_val)
 
     rslt = Geo(def_val=def_val)
@@ -819,3 +828,18 @@ def convert_to_geo(value: Union[float, int, bool, complex, dict], def_val=0.0) -
         rslt[GEO_SHAPE["tri-vector"][0]] = value.imag
 
     return rslt
+
+
+def from_mag_pha_vectorized(mag_vec: Union[dict, float: 0.0, complex, int, bool, Geo],
+                            pha_vec: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+    if not isinstance(mag_vec, Geo):
+        mag_vec = convert_to_geo(value=mag_vec)
+    if not isinstance(pha_vec, Geo):
+        pha_vec = convert_to_geo(value=pha_vec)
+
+    nw_spc = Geo()
+    for ky_num in GEO_SHAPE3:
+        nw_spc['+' + ky_num] = mag_vec['+' + ky_num] * np.cos(pha_vec['-' + ky_num])
+        nw_spc['-' + ky_num] = mag_vec['+' + ky_num] * np.sin(pha_vec['-' + ky_num])
+
+    return nw_spc
