@@ -6,12 +6,8 @@ import cmath as cm
 import json
 
 SPATIAL_KEYS = ("+0", "-0", "+1", "-1", "+2", "-2", "+3", "-3")
-GEO_SHAPE3 = ('0', '1', '2', '3')
-
-COM_ROT = {"++": 1, "+-": 1, "-+": 1, "--": -1}
-GEO_ROT = {"12": 1, "21": -1, "13": 1, "31": -1, "23": 1, "32": -1,
-           "01": 1, "02": 1, "03": 1, "10": 1, "20": 1, "30": 1,
-           "00": 1, "11": 1, "22": 1, "33": 1}
+RED_GEO_SHAPE = ('0', '1', '2', '3')
+RED_GEO_SHAPE_UPPER = {'0': ('1', '2', '3'), '1': ('2', '3'), '2': ('3',)}
 
 GEO_SHAPE = {"scalar": ("+0",),
              "vector": ("+1", "+2", "+3"),
@@ -20,19 +16,72 @@ GEO_SHAPE = {"scalar": ("+0",),
              "scalars": ("+0", "-0"),
              "vectors": ("+1", "+2", "+3", "-1", "-2", "-3")}
 
-GEO_SPATIAL_KEYS = {
-    "+0": {"+0": "+0", "-0": "-0", "+1": "+1", "-1": "-1", "+2": "+2", "-2": "-2", "+3": "+3", "-3": "-3"},
-    "-0": {"+0": "-0", "-0": "+0", "+1": "-1", "-1": "+1", "+2": "-2", "-2": "+2", "+3": "-3", "-3": "+3"},
-    "+1": {"+0": "+1", "-0": "-1", "+1": "+0", "-1": "-0", "+2": "-3", "-2": "+3", "+3": "-2", "-3": "+2"},
-    "-1": {"+0": "-1", "-0": "+1", "+1": "-0", "-1": "+0", "+2": "+3", "-2": "-3", "+3": "+2", "-3": "-2"},
-    "+2": {"+0": "+2", "-0": "-2", "+1": "-3", "-1": "+3", "+2": "+0", "-2": "-0", "+3": "-1", "-3": "+1"},
-    "-2": {"+0": "-2", "-0": "+2", "+1": "+3", "-1": "-3", "+2": "-0", "-2": "+0", "+3": "+1", "-3": "-1"},
-    "+3": {"+0": "+3", "-0": "-3", "+1": "-2", "-1": "+2", "+2": "-1", "-2": "+1", "+3": "+0", "-3": "-0"},
-    "-3": {"+0": "-3", "-0": "+3", "+1": "+2", "-1": "-2", "+2": "+1", "-2": "-1", "+3": "-0", "-3": "+0"}}
-
-
-def flip_sign(key1, key2) -> float:
-    return GEO_ROT[key1[1] + key2[1]] * COM_ROT[key1[0] + key2[0]]
+# X|Y ==> GRK[X_ky][Y_ky] = (dim_red*complex_rot*(geo-product mid op))
+GEO_RED_KYS = {
+    "+0": {"+0": ("+0", 1),
+           "-0": ("-0", 1),
+           "+1": ("+1", 1),
+           "-1": ("-1", 1),
+           "+2": ("+2", 1),
+           "-2": ("-2", 1),
+           "+3": ("+3", 1),
+           "-3": ("-3", 1)},
+    "-0": {"+0": ("-0", 1),
+           "-0": ("+0", -1),
+           "+1": ("-1", 1),
+           "-1": ("+1", -1),
+           "+2": ("-2", 1),
+           "-2": ("+2", -1),
+           "+3": ("-3", 1),
+           "-3": ("+3", -1)},
+    "+1": {"+0": ("+1", 1),
+           "-0": ("-1", 1),
+           "+1": ("+0", 1),
+           "-1": ("-0", 1),
+           "+2": ("-3", 1),
+           "-2": ("+3", 1),
+           "+3": ("-2", 1),
+           "-3": ("+2", 1)},
+    "-1": {"+0": ("-1", 1),
+           "-0": ("+1", -1),
+           "+1": ("-0", 1),
+           "-1": ("+0", -1),
+           "+2": ("+3", 1),
+           "-2": ("-3", -1),
+           "+3": ("+2", 1),
+           "-3": ("-2", -1)},
+    "+2": {"+0": ("+2", 1),
+           "-0": ("-2", 1),
+           "+1": ("-3", 1),
+           "-1": ("+3", 1),
+           "+2": ("+0", 1),
+           "-2": ("-0", 1),
+           "+3": ("-1", 1),
+           "-3": ("+1", 1)},
+    "-2": {"+0": ("-2", 1),
+           "-0": ("+2", -1),
+           "+1": ("+3", 1),
+           "-1": ("-3", -1),
+           "+2": ("-0", 1),
+           "-2": ("+0", -1),
+           "+3": ("+1", 1),
+           "-3": ("-1", -1)},
+    "+3": {"+0": ("+3", 1),
+           "-0": ("-3", 1),
+           "+1": ("-2", 1),
+           "-1": ("+2", 1),
+           "+2": ("-1", 1),
+           "-2": ("+1", 1),
+           "+3": ("+0", 1),
+           "-3": ("-0", 1)},
+    "-3": {"+0": ("-3", 1),
+           "-0": ("+3", -1),
+           "+1": ("+2", 1),
+           "-1": ("-2", -1),
+           "+2": ("+1", 1),
+           "-2": ("-1", -1),
+           "+3": ("-0", 1),
+           "-3": ("+0", -1)}}
 
 
 @dataclass
@@ -56,16 +105,21 @@ class Geo:
     !!!!!!!!!!!!!!!!!! USE BRACKETS TO ENSURE PROPER ORDER OF OPERATION !!!!!!!!!!!!!!!!!!!!!
     """
 
-    def __init__(self, src: Union[dict, Geo] = None, def_val=0.0):
+    def __init__(self, src: Union[float, int, bool, complex, dict, Geo] = None, def_val=0.0):
         """
         dimension 0 is assumed to be scalar while others are part of a vector/bi-/tri-.
         The layout is {+0, +1, +2, +3, -1, -2, -3, -0}
         """
 
-        if src is None:
-            self.__vec = {sp_key: def_val for sp_key in SPATIAL_KEYS}
-        else:
+        if isinstance(src, (dict, Geo)):
             self.__vec = {sp_key: src.get(sp_key, def_val) for sp_key in SPATIAL_KEYS}
+        else:
+            self.__vec = {sp_key: def_val for sp_key in SPATIAL_KEYS}
+            if isinstance(src, (float, int, bool)):
+                self.__vec[GEO_SHAPE["scalar"][0]] = src
+            elif isinstance(src, (complex,)):
+                self.__vec[GEO_SHAPE["scalar"][0]] = src.real
+                self.__vec[GEO_SHAPE["tri-vector"][0]] = src.imag
 
     def sum(self) -> float:
         tot_v = 0.0
@@ -210,7 +264,7 @@ class Geo:
                 nw_spc['+' + ky[1]] = val
         return nw_spc
 
-    def phase(self) -> Geo:
+    def phase(self, deg=False) -> Geo:
         """
         Get the Geo showing the radian phase relative to the scalar.
         :return:
@@ -219,7 +273,9 @@ class Geo:
         for ky in self.keys():
             if ky != '+0':
                 c_num = self['+0'] + self[ky]*1j
-                nw_spc[ky] = np.phase(c_num)
+                nw_spc[ky] = cm.phase(c_num)
+                if deg:
+                    nw_spc[ky] *= 180 / np.pi
 
         return nw_spc
 
@@ -306,7 +362,7 @@ class Geo:
 
         reslt = Geo()
 
-        for ky_num in GEO_SHAPE3:
+        for ky_num in RED_GEO_SHAPE:
             mag_val = geo_mag_vec['+' + ky_num] ** power
             phs_val = geo_phs_vec['-' + ky_num] * power
             reslt['+' + ky_num] += mag_val * np.cos(phs_val)
@@ -316,7 +372,7 @@ class Geo:
 
     def __rpow__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other ** self
 
     def __truediv__(self, other: Union[dict, float: 1.0, complex, int, bool, Geo]) -> Geo:
@@ -340,7 +396,7 @@ class Geo:
 
     def __rtruediv__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(other, 0.0)
+            other = Geo(other, 0.0)
         return other / self
 
     def __floordiv__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
@@ -358,7 +414,7 @@ class Geo:
 
     def __rfloordiv__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(other)
+            other = Geo(other)
         return other // self
 
     def __divmod__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> (Geo, Geo):
@@ -366,7 +422,7 @@ class Geo:
 
     def __rdivmod__(self, other):
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other.__divmod__(self)
 
     def __mod__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
@@ -374,7 +430,7 @@ class Geo:
 
     def __rmod__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(other)
+            other = Geo(other)
         return other % self
 
     def __add__(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
@@ -485,20 +541,22 @@ class Geo:
         :return:
         """
         nw_spc = Geo()
-        for ky_num in GEO_SHAPE3:
+        for ky_num in RED_GEO_SHAPE:
             nw_spc['+' + ky_num] = np.sqrt(self['+' + ky_num] ** 2 + self['-' + ky_num] ** 2)
 
         return nw_spc
 
-    def phase_vectorized(self) -> Geo:
+    def phase_vectorized(self, deg=False) -> Geo:
         """
         Get the bi-vector and tri-vector showing the radian phase of the complex values.
         :return:
         """
         nw_spc = Geo()
-        for ky_num in GEO_SHAPE3:
+        for ky_num in RED_GEO_SHAPE:
             c_num = self['+' + ky_num] + self['-' + ky_num]*1j
             nw_spc['-' + ky_num] = cm.phase(c_num)
+            if deg:
+                nw_spc['-' + ky_num] *= 180 / np.pi
 
         return nw_spc
 
@@ -510,6 +568,8 @@ class Geo:
         Get 1/x of this Geo.
         :return:
         """
+        if self == 0:
+            return Geo()
         nw_spc = self.conj()
         nw_spc /= self.magnitude_sq()
         return nw_spc
@@ -522,17 +582,24 @@ class Geo:
         :return: a geospatial set with the resulting real scalar in +0
         """
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
 
         nw_spc = Geo()
-        for o_key in other.keys():
-            nw_spc[GEO_SPATIAL_KEYS[o_key][o_key]] += self[o_key] * other[o_key] * COM_ROT[o_key[0] + o_key[0]]
+        for o_key in RED_GEO_SHAPE:
+            p_key = '+' + o_key
+            n_key = '-' + o_key
+            # real results
+            nw_spc[GEO_RED_KYS[n_key][n_key][0]] += self[n_key] * other[n_key] * GEO_RED_KYS[n_key][n_key][1]
+            nw_spc[GEO_RED_KYS[p_key][p_key][0]] += self[p_key] * other[p_key] * GEO_RED_KYS[p_key][p_key][1]
+            # imaginary results
+            nw_spc[GEO_RED_KYS[p_key][n_key][0]] += self[p_key] * other[n_key] * GEO_RED_KYS[p_key][n_key][1]
+            nw_spc[GEO_RED_KYS[n_key][p_key][0]] += self[n_key] * other[p_key] * GEO_RED_KYS[n_key][p_key][1]
 
         return nw_spc
 
     def __rand__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other & self
 
     def __xor__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
@@ -544,19 +611,40 @@ class Geo:
         """
 
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
 
         nw_spc = Geo()
-        for o_key in other.keys():
-            for s_key in self.keys():
-                if s_key != o_key:
-                    nw_spc[GEO_SPATIAL_KEYS[s_key][o_key]] += self[s_key] * other[o_key] * flip_sign(o_key, s_key) * 0.5
+        for o_key in RED_GEO_SHAPE_UPPER.keys():
+            pk1 = '+' + o_key
+            nk1 = '-' + o_key
+            for s_key in RED_GEO_SHAPE_UPPER[o_key]:
+                pk2 = '+' + s_key
+                nk2 = '-' + s_key
+                if s_key in ('1', '3') and o_key in ('1', '3'):
+                    x_sgn = -1
+                else:
+                    x_sgn = 1
+                # bi-vector and bi-vector cross-product
+                nw_spc[GEO_RED_KYS[pk1][pk2][0]] += self[pk1] * other[pk2] * GEO_RED_KYS[pk1][pk2][1] * x_sgn
+                nw_spc[GEO_RED_KYS[pk2][pk1][0]] -= self[pk2] * other[pk1] * GEO_RED_KYS[pk2][pk1][1] * x_sgn
 
+                # bi-vector and tri-vector cross-product
+                nw_spc[GEO_RED_KYS[pk1][nk2][0]] += self[pk1] * other[nk2] * GEO_RED_KYS[pk1][nk2][1] * x_sgn
+                nw_spc[GEO_RED_KYS[pk2][nk1][0]] -= self[pk2] * other[nk1] * GEO_RED_KYS[pk2][nk1][1] * x_sgn
+
+                # tri-vector and tri-vector cross-product
+                nw_spc[GEO_RED_KYS[nk1][nk2][0]] += self[nk1] * other[nk2] * GEO_RED_KYS[nk1][nk2][1] * x_sgn
+                nw_spc[GEO_RED_KYS[nk2][nk1][0]] -= self[nk2] * other[nk1] * GEO_RED_KYS[nk2][nk1][1] * x_sgn
+
+                # tri-vector and bi-vector cross-product
+                nw_spc[GEO_RED_KYS[nk1][pk2][0]] += self[nk1] * other[pk2] * GEO_RED_KYS[nk1][pk2][1] * x_sgn
+                nw_spc[GEO_RED_KYS[nk2][pk1][0]] -= self[nk2] * other[pk1] * GEO_RED_KYS[nk2][pk1][1] * x_sgn
+        # print(nw_spc)
         return nw_spc
 
     def __rxor__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other ^ self
 
     def __or__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
@@ -566,24 +654,11 @@ class Geo:
         :param other: contains a scalar, vector, bi-vector, and/or tri-vector
         :return: a geospatial set
         """
-
-        if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
-
-        nw_spc = Geo()
-        for o_key in other.keys():
-            for s_key in self.keys():
-                cmpnd = self[s_key] * other[o_key] * flip_sign(o_key, s_key)
-                if o_key != s_key:
-                    cmpnd *= 0.5
-
-                nw_spc[GEO_SPATIAL_KEYS[s_key][o_key]] += cmpnd
-
-        return nw_spc
+        return (self & other) + (self ^ other)
 
     def __ror__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other | self
 
     def __matmul__(self, other: Union[dict, float: 1.0, int, bool, Geo]) -> Geo:
@@ -598,14 +673,14 @@ class Geo:
         """
 
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         # normy = other.norm()
 
         return other.inverse() | self | other
 
     def __rmatmul__(self, other) -> Geo:
         if not isinstance(other, Geo):
-            other = convert_to_geo(value=other)
+            other = Geo(other)
         return other @ self
 
     def __invert__(self) -> Geo:
@@ -614,7 +689,7 @@ class Geo:
         :return:
         """
         rslt = Geo()
-        for ky1 in GEO_SHAPE3:
+        for ky1 in RED_GEO_SHAPE:
             rslt['+' + ky1] = rslt['-' + ky1]
             rslt['-' + ky1] = rslt['+' + ky1]
 
@@ -814,31 +889,15 @@ class Geo:
         return rslt
 
 
-def convert_to_geo(value: Union[float, int, bool, complex, dict, Geo], def_val=0.0) -> Geo:
-    if value is None:
-        return Geo()
-    elif isinstance(value, (dict, Geo)):
-        return Geo(value, def_val=def_val)
-
-    rslt = Geo(def_val=def_val)
-    if isinstance(value, (float, int, bool)):
-        rslt[GEO_SHAPE["scalar"][0]] = value
-    else:
-        rslt[GEO_SHAPE["scalar"][0]] = value.real
-        rslt[GEO_SHAPE["tri-vector"][0]] = value.imag
-
-    return rslt
-
-
 def from_mag_pha_vectorized(mag_vec: Union[dict, float: 0.0, complex, int, bool, Geo],
                             pha_vec: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
     if not isinstance(mag_vec, Geo):
-        mag_vec = convert_to_geo(value=mag_vec)
+        mag_vec = Geo(mag_vec)
     if not isinstance(pha_vec, Geo):
-        pha_vec = convert_to_geo(value=pha_vec)
+        pha_vec = Geo(pha_vec)
 
     nw_spc = Geo()
-    for ky_num in GEO_SHAPE3:
+    for ky_num in RED_GEO_SHAPE:
         nw_spc['+' + ky_num] = mag_vec['+' + ky_num] * np.cos(pha_vec['-' + ky_num])
         nw_spc['-' + ky_num] = mag_vec['+' + ky_num] * np.sin(pha_vec['-' + ky_num])
 
