@@ -132,7 +132,7 @@ class Geo:
         Get the magnitude squared of this Geo. I.e. ||x||**2
         :return:
         """
-        return (self & self.conj())[SPATIAL_KEYS[0]]
+        return (self & self.conj())['+0']
 
     def magnitude(self) -> float:
         """
@@ -149,7 +149,7 @@ class Geo:
 
     def __str__(self) -> str:
         n_str = "Geo<"
-        for dim in SPATIAL_KEYS:
+        for dim in self.keys():
             n_str += f"{dim}: {self[dim]}, "
 
         n_str = n_str[:-2] + ">"
@@ -186,12 +186,12 @@ class Geo:
         return self.__vec.items()
 
     def __index__(self) -> int:
-        return len(SPATIAL_KEYS)
+        return len(self.keys())
 
     def __iter__(self) -> iter:
         return iter([(ky, self[ky]) for ky in self.keys()])
 
-    def __getitem__(self, key: str) -> float:
+    def __getitem__(self, key: str) -> Union[float, complex, Geo]:
         """
         it is assumed keys are from the SPATIAL_KEYS tuple.
         :param key:
@@ -199,25 +199,48 @@ class Geo:
         """
         if key in self.keys():
             return self.__vec[key]
+        elif key in RED_GEO_SHAPE:
+            return self.__vec[f"+{key}"] + self.__vec[f"-{key}"]*1j
+        elif key == '+':
+            return self.real()
+        elif key == '-':
+            return self.imag()
+        if key in GEO_SHAPE.keys():
+            return Geo(src={ky: self[ky] for ky in GEO_SHAPE[key]})
         raise KeyError(f"{key} does not exist in {self.keys()}.")
 
-    def get(self, key, default) -> float:
-        if key not in self.keys():
-            return default
-        return self[key]
+    def get(self, key, default) -> Union[float, complex, Geo]:
+        if key in self.keys():
+            return self.__vec[key]
+        elif key in RED_GEO_SHAPE:
+            return self.__vec[f"+{key}"] + self.__vec[f"-{key}"]*1j
+        elif key == '+':
+            return self.real()
+        elif key == '-':
+            return self.imag()
+        if key in GEO_SHAPE.keys():
+            return Geo(src={ky: self[ky] for ky in GEO_SHAPE[key]})
+        return default
 
-    def __setitem__(self, key: str, value: float) -> None:
+    def __setitem__(self, key: str, value: Union[float, complex, Geo]) -> None:
         """
 
         :param key:
         :param value:
         :return:
         """
-        if key in self.keys():
-            self.__vec[key] = value
-        else:
-            raise KeyError(f"{key} does not exist in {self.keys()}.")
-        return
+        if key in self.keys() and isinstance(value, (float, int, bool)):
+            self.__vec[key] = float(value)
+        elif key in RED_GEO_SHAPE and isinstance(value, (complex,)):
+            self.__vec[f"+{key}"] = value.real
+            self.__vec[f"-{key}"] = value.imag
+        elif key in ('-', '+') and isinstance(value, (Geo,)):
+            for n_key in RED_GEO_SHAPE:
+                self[key + n_key] = value[key + n_key]
+        if key in GEO_SHAPE.keys() and isinstance(value, (Geo,)):
+            for ky in GEO_SHAPE[key]:
+                self[ky] = value[ky]
+        raise KeyError(f"{key} does not exist in {self.keys()}.")
 
     def __delattr__(self, item) -> None:
         if item in self.keys():
@@ -231,16 +254,6 @@ class Geo:
         for ky, val in self.items():
             reslt[ky] = format_spec(self[ky])
         return reslt
-
-    def subset(self, typ="scalar") -> Geo:
-        """
-        Get the sub-set Geo based on the global GEO_SHAPE.
-        :param typ: 'scalar', 'vector', 'bi-vector', 'tri-vector'
-        :return:
-        """
-        if typ in GEO_SHAPE.keys():
-            return Geo(src={ky: self[ky] for ky in GEO_SHAPE[typ]})
-        raise KeyError(f"{typ} is not a valid key for geometric subsets.")
 
     def real(self) -> Geo:
         """
@@ -529,6 +542,30 @@ class Geo:
         return Geo(self)
 
     # ---- cross-dimensional operations ------------
+    def rot(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+        """
+        Use all elements to rotate other
+        :param other:
+        :return:
+        """
+        return self | other | -self.inverse().conj()
+
+    def rot_imag(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+        """
+        use the real vector to rotate the imaginary elements of other.
+        :param other:
+        :return:
+        """
+        return self['+'] | other['-'] | -self['+'].inverse()
+
+    def rot_real(self, other: Union[dict, float: 0.0, complex, int, bool, Geo]) -> Geo:
+        """
+        use the imaginary vector to rotate the real elements of other.
+        :param other:
+        :return:
+        """
+        return self['-'] | other['+'] | self['-'].inverse()
+
     def norm(self) -> Geo:
         mag = self.magnitude()
         if mag == 0.0:
